@@ -1,179 +1,111 @@
 # Financial Risk Analyzer
 
-## 📋 Description
+A multi-agent credit risk analyzer built with the [Strands Agents SDK](https://strandsagents.com) on Amazon Bedrock.
+A **Swarm** of four specialized agents pulls customer financial data (S3) and profile data (DynamoDB),
+weighs it against market conditions, and returns a per-customer risk rating with justification,
+through a Streamlit dashboard.
 
-The Financial Risk Analyzer is an intelligent multi-agent system designed for comprehensive financial risk profile analysis of customers at large financial institutions. It leverages **Agentic AI** and the **AWS Strands framework** to dynamically scale multiple specialized agents based on the number of customer profiles being analyzed. The system autonomously coordinates between different analytical agents to provide holistic risk assessments and actionable insights.
+## Architecture
 
-## ✨ Features
+```
+            ┌──────────────────┐   handoff   ┌──────────────────┐   handoff   ┌──────────────────┐   handoff   ┌──────────────────┐
+ prompt ──▶ │ financial_agent  │ ──────────▶ │  profile_agent   │ ──────────▶ │   market_agent   │ ──────────▶ │ summarizer_agent │ ──▶ risk report
+            │ tool: S3 CSV     │             │ tool: DynamoDB   │             │ (no tools)       │             │ final ratings    │
+            └──────────────────┘             └──────────────────┘             └──────────────────┘             └──────────────────┘
+```
 
-- **Multi-Agent Architecture** - Dynamically spawned agents that scale based on analysis requirements
-- **Profile Analysis** - In-depth customer profile examination and assessment
-- **Credit Risk Analysis** - Comprehensive credit history and creditworthiness evaluation
-- **Market Risk Analysis** - Real-time market exposure and trend analysis
-- **Intelligent Summarization** - Automated synthesis of findings into actionable risk reports
-- **Autonomous Coordination** - Agents collaborate independently to gather and cross-validate information
-- **AWS Integration** - Built on AWS Strands framework for enterprise-grade reliability and scalability
+| Agent | Data source | Role |
+|---|---|---|
+| `financial_agent` | S3 CSV via `read_customer_creditdata` | Loan type, amount, occupation, repayment signals |
+| `profile_agent` | DynamoDB via `read_customer_profile` | Profile attributes; cross-checks financial data |
+| `market_agent` | Model knowledge only | Macro / employment risk by occupation and loan type |
+| `summarizer_agent` | Other agents' output | Very High / High / Medium / Low rating, drivers, action |
 
-## 🏗️ Architecture
+The swarm starts at `financial_agent`; agents decide handoffs themselves, bounded by the limits in `config.py`.
 
-The system consists of four primary agents that work collaboratively:
+### Data handling
 
-1. **Profile Agent** - Analyzes customer demographics, financial history, and background information
-2. **Credit Agent** - Evaluates creditworthiness, credit scores, debt ratios, and repayment history
-3. **Market Analyzer Agent** - Assesses market exposure, economic indicators, and industry-specific risks
-4. **Summarizer Agent** - Consolidates findings from all agents into comprehensive risk profiles and recommendations
+- Tools take the customer names from the request and return **only those customers**, not the whole dataset.
+- Direct identifiers (`SSN`, `License`, `Passport`, `Email`, `Phone`) are **stripped before data reaches the model**
+  (see `REDACTED_FIELDS` in `tools.py`).
+- The summarizer is instructed not to base ratings on marital status, health condition or age.
+- The sample CSVs in this repo contain synthetic data only.
 
-These agents operate within the AWS Strands framework, which handles orchestration, communication, and dynamic scaling based on workload demands.
+## Project structure
 
-## 🚀 Getting Started
+```
+├── agents.py            # build_swarm(): agent + swarm definitions (also runnable as a CLI)
+├── tools.py             # S3 / DynamoDB tools with name filtering and PII redaction
+├── prompts.py           # System prompts for each agent
+├── config.py            # Settings from environment variables
+├── dashboard.py         # Streamlit UI with live per-agent progress
+├── tests/test_tools.py  # Tool tests (AWS mocked with moto)
+├── customer_financial_info_updated.csv   # sample data for the S3 bucket
+├── customer_profiles.csv                 # sample data for the DynamoDB table
+└── ptr_streamlit_ec2_terraform_module-main.zip  # Terraform module to host the app on EC2
+```
+
+## Getting started
 
 ### Prerequisites
 
-- Python 3.8+
-- AWS Account with appropriate permissions
-- AWS Strands framework access
-- Boto3 SDK
-- [Add other key dependencies]
+- Python 3.10+
+- AWS credentials with access to:
+  - Amazon Bedrock, with model access enabled for the configured model
+  - `s3:GetObject` on the credit-data object
+  - `dynamodb:Scan` on the profile table
 
-### Installation
+### Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/vimal-venugopal16/AWS_Strands_Financial_Risk_Analyzer.git
 cd AWS_Strands_Financial_Risk_Analyzer
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Configuration
+### Configure
+
+All settings have defaults and can be overridden with environment variables:
+
+| Variable | Default |
+|---|---|
+| `AWS_REGION` | `us-east-1` |
+| `RISK_MODEL_ID` | `us.anthropic.claude-3-7-sonnet-20250219-v1:0` |
+| `RISK_CREDIT_BUCKET` | `awsstrands-riskanalyzer` |
+| `RISK_CREDIT_KEY` | `bank_customer_repayment_data.csv` |
+| `RISK_PROFILE_TABLE` | `riskanalysis_customer_profilesV1` |
+| `RISK_MAX_HANDOFFS` / `RISK_MAX_ITERATIONS` | `20` / `20` |
+| `RISK_EXECUTION_TIMEOUT` / `RISK_NODE_TIMEOUT` (seconds) | `900` / `300` |
+
+### Run
 
 ```bash
-# Configure AWS credentials
-aws configure
+# Dashboard
+streamlit run dashboard.py
 
-# Set required environment variables
-export AWS_REGION=us-east-1
-export STRANDS_ENV=production
+# Or from the command line
+python agents.py "Analyze Ava Wilson and David Miller and provide a risk rating."
 ```
 
-## 📖 Usage
+Example prompt:
 
-```python
-# Example usage
-from financial_risk_analyzer import RiskAnalyzer
+> Analyze the following customers based on profile, financial, and market information and provide a risk rating: Ava Brown, Wood Gregory, Fuller Crystal, Mills Susan
 
-analyzer = RiskAnalyzer()
+Names can be given as "First Last" or "Last First".
 
-# Analyze customer profiles
-profiles = [
-    {"customer_id": "C001", "name": "John Doe"},
-    {"customer_id": "C002", "name": "Jane Smith"}
-]
-
-results = analyzer.analyze(profiles)
-
-# Results include:
-# - Individual risk profiles
-# - Credit risk assessments
-# - Market exposure analysis
-# - Executive summary
-```
-
-## 📁 Project Structure
-
-```
-AWS_Strands_Financial_Risk_Analyzer/
-├── README.md
-├── requirements.txt
-├── agents/
-│   ├── profile_agent.py
-│   ├── credit_agent.py
-│   ├── market_analyzer_agent.py
-│   └── summarizer_agent.py
-├── orchestrator/
-│   └── strands_coordinator.py
-├── models/
-│   └── [Data models and schemas]
-├── utils/
-│   └── [Utility functions]
-└── examples/
-    └── [Sample implementations]
-```
-
-## 🔧 Configuration
-
-### AWS Strands Setup
-
-Configure the AWS Strands framework parameters in your environment:
+### Test
 
 ```bash
-STRANDS_FRAMEWORK_VERSION=latest
-STRANDS_AGENT_TIMEOUT=300
-STRANDS_MAX_CONCURRENT_AGENTS=10
+pip install -r requirements-dev.txt
+pytest -q
 ```
 
-### Agent Configuration
+## Deployment
 
-Each agent can be configured independently for specific analysis parameters:
-- Timeout thresholds
-- Data sources
-- Risk scoring models
-- Reporting formats
+`ptr_streamlit_ec2_terraform_module-main.zip` contains a Terraform module that provisions an EC2 instance
+with an IAM role to run the Streamlit app. A GitHub Codespaces dev container is also included (`.devcontainer/`).
 
-## 📊 Output
-
-The analyzer generates:
-
-- **Risk Profiles** - Comprehensive risk assessments per customer
-- **Risk Scores** - Quantified risk metrics (0-100 scale)
-- **Recommendations** - Actionable mitigation strategies
-- **Executive Summary** - High-level overview of portfolio risk
-
-## 🔄 How It Works
-
-1. User submits customer profiles for analysis
-2. Orchestrator spawns appropriate number of agent instances
-3. Profile Agent retrieves and validates customer data
-4. Credit Agent analyzes credit metrics independently
-5. Market Analyzer Agent evaluates market risks simultaneously
-6. Agents share findings and cross-validate results
-7. Summarizer Agent synthesizes all data into final reports
-8. Results are aggregated and presented
-
-## 📝 Requirements
-
-Detailed dependencies are listed in `requirements.txt`. Key packages include:
-- boto3 (AWS SDK)
-- AWS Strands framework
-- pandas (Data processing)
-- [Add other major dependencies]
-
-## 📝 License
-
-[Add your license type - e.g., MIT, Apache 2.0, etc.]
-
-## 👤 Author
+## Author
 
 **Vimal Venugopal**
-
-For questions or feedback, please open an issue or contact the repository maintainer.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
-
-## 📚 Additional Resources
-
-- [AWS Strands Framework Documentation](https://docs.aws.amazon.com/strands/)
-- [Financial Risk Analysis Best Practices](https://www.example.com)
-- [Project Issues & Discussions](https://github.com/vimal-venugopal16/AWS_Strands_Financial_Risk_Analyzer/issues)
